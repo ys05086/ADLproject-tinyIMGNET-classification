@@ -14,18 +14,11 @@ def read_gt(gt_txt, num_img):
     f = open(gt_txt, 'r')
     lines = f.readlines()
 
-    for it in tqdm(range(len(lines))):
+    for it in range(len(lines)):
         cls[it] = int((lines[it])[:-1]) - 1 # 1 - 200 txt -> to = 0 - 199
     
     f.close()
     return cls
-
-# Image Load
-def load_image(path, num_img, mean = None, std = None, preprocessing = False):
-    imgs = np.zeros((num_img, 128, 128, 3)) # shape [N, H, W, C]
-    cls = 200
-
-    return imgs, cls, mean, std
 
 # Image Preprocessing
 def data_preprocessing(imgs, mean = None, std = None):
@@ -36,13 +29,15 @@ def data_preprocessing(imgs, mean = None, std = None):
     return imgs, mean, std
 
 # Mean and Std Calculation
+# think about deviding to 255 first
 def mean_std_calculation(z_file, z_file_list):
     # calculate mean first and std next
     sum_ = np.zeros(3) # sum for each channel
     sum_sq = np.zeros(3) # sum of squares for each channel
-    for it in tqdm(range(len(z_file_list))):
+    for it in tqdm(range(len(z_file_list)), ncols = 120, desc = 'Mean, Std Calculation'):
         img_temp = z_file.read(z_file_list[it])
         img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
+        img_temp = img_temp / 255.0 # normalize to [0, 1]
         img_temp = img_temp.astype(np.float32)
 
         sum_ += np.mean(img_temp, axis = (0, 1)) # sum for each channel
@@ -52,6 +47,9 @@ def mean_std_calculation(z_file, z_file_list):
     # for formula derivation, check my notes
     mean = sum_ / len(z_file_list)
     std = np.sqrt((sum_sq / len(z_file_list)) - (mean ** 2))
+
+    mean = mean.astype(np.float32)
+    std = std.astype(np.float32)
 
     return mean, std
 
@@ -95,6 +93,9 @@ def mini_batch_training_zip(z_file, z_file_list, train_cls, batch_size, mean, st
         img_temp = z_file.read(z_file_list[temp])
         img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
         img_temp = img_temp.astype(np.float32)
+        img_temp = (img_temp / 255.0 - mean) / std
+
+        batch_img[it, :, :, :] = img_temp if not augmentation else image_augmentation(img_temp)
 
     return batch_img, batch_cls
 
@@ -118,11 +119,17 @@ class ResNet101(torch.nn.Module):
         # Stage 4
 
         
-
-
     def forward(self, x):
         return x
     
+class ResNet152(torch.nn.Module):
+    def __init__(self, outputsize = 200):
+        super(ResNet152, self).__init__()
+
+    def forward(self, x):
+        return x
+
+
 # RoR-3 Net( 110 )
 
 # Residual Block: Basic Block(pre-activation)
