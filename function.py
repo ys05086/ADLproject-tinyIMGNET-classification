@@ -20,13 +20,14 @@ def read_gt(gt_txt, num_img):
     f.close()
     return cls
 
-# Image Preprocessing
-def data_preprocessing(imgs, mean = None, std = None):
-    # if mean is None or std is None:
-    #     mean = np.mean(imgs, axis=(0, 1, 2)) # mean for each channel
-    #     std = np.std(imgs, axis=(0, 1, 2)) # std for each channel
-    imgs = (imgs - mean) / std
-    return imgs, mean, std
+# Read image and calculate mean and std
+def read_image_mean_std(z_file, z_file_list, mean, std, index):
+    img_temp = z_file.read(z_file_list[index])
+    img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
+    img_temp = img_temp.astype(np.float32)
+    img_temp = img_temp / 255.0 # normalize to [0, 1]
+    img_temp = (img_temp - mean) / std
+    return img_temp
 
 # Mean and Std Calculation
 # think about deviding to 255 first
@@ -96,6 +97,7 @@ def mini_batch_training_zip(z_file, z_file_list, train_cls, batch_size, mean, st
         img_temp = (img_temp / 255.0 - mean) / std
 
         batch_img[it, :, :, :] = img_temp if not augmentation else image_augmentation(img_temp)
+        batch_cls[it] = train_cls[temp]
 
     return batch_img, batch_cls
 
@@ -122,15 +124,64 @@ class ResNet101(torch.nn.Module):
     def forward(self, x):
         return x
     
+
+# RoR-3 Net( 110 )
+
+
+# ResNet 152
+# Structure: 3 - 8 - 36 - 3
 class ResNet152(torch.nn.Module):
     def __init__(self, outputsize = 200):
         super(ResNet152, self).__init__()
+        self.in_channels = 64
+        self.mid_channels = 64
+        self.ReLU = torch.nn.ReLU()
+        self.input_conv = torch.nn.Conv2d(3, self.in_channels, kernel_size = 3, stride = 1, padding = 1, bias = False)
+
+        # Stages
+        self.stage1 = StageBlock(self.in_channels, self.mid_channels, num_blocks = 3, stride = 1)
+        self.stage2 = StageBlock(self.in_channels * 4, self.mid_channels * 2, num_blocks = 8, stride = 2)
+        self.stage3 = StageBlock(self.in_channels * 8, self.mid_channels * 4, num_blocks = 36, stride = 2)
+        self.stage4 = StageBlock(self.in_channels * 16, self.mid_channels * 8, num_blocks = 3, stride = 2) # shape = [N, 2048, 8, 8]
+        self.bn_final = torch.nn.BatchNorm2d(self.mid_channels * 8 * 4)
+
+        # Average Pooling and Fully Connected Layer
+        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = torch.nn.Linear(2048, 1000)
+        self.output = torch.nn.Linear(1000, outputsize)
 
     def forward(self, x):
+        x = self.input_conv(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+
+        x = self.bn_final(x)
+        x = self.ReLU(x)
+        x = self.avgpool(x)
+        x = torch.reshape(x, [-1, 2048])
+        x = self.fc(x)
+        x = self.output(x)
+
         return x
+    
+# Residual stage block
+class StageBlock(torch.nn.Module):
+    def __init__(self, in_channels, mid_channels, num_blocks, stride = 1):
+        super(StageBlock, self).__init__()
+        
+        self.blocks = torch.nn.ModuleList()
+        for i in range(num_blocks):
+            if i == 0:
+                self.blocks.append(BottleNeck(in_channels, mid_channels, stride = stride))
+            else:
+                self.blocks.append(BottleNeck(mid_channels * 4, mid_channels, stride = 1))
 
-
-# RoR-3 Net( 110 )
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
 
 # Residual Block: Basic Block(pre-activation)
 class Block(torch.nn.Module):
