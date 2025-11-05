@@ -25,8 +25,7 @@ def read_image_mean_std(z_file, z_file_list, mean, std, index):
     img_temp = z_file.read(z_file_list[index])
     img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
     img_temp = img_temp.astype(np.float32)
-    img_temp = img_temp / 255.0 # normalize to [0, 1]
-    img_temp = (img_temp - mean) / std
+    img_temp = (img_temp / 255.0 - mean) / std
     return img_temp
 
 # Mean and Std Calculation
@@ -62,7 +61,7 @@ def image_augmentation(image, cutout = False, flip = True, flip_prob = 0.5):
 
         holes = 1 # number of holes to cut out from image
                   # in this case, we use only one hole  
-        length = H // 2 # length of the holes
+        length = 32 # length of the holes
         mask = np.ones((H, W, 1), np.float32)
         for n in range(holes):
             y = np.random.randint(H)
@@ -102,31 +101,44 @@ def mini_batch_training_zip(z_file, z_file_list, train_cls, batch_size, mean, st
     return batch_img, batch_cls
 
 # ResNet 101
+# Structure: 3 - 4 - 23 - 3
 class ResNet101(torch.nn.Module):
     def __init__(self, outputsize = 200):
         super(ResNet101, self).__init__()
         self.in_channels = 64
-
+        self.mid_channels = 64
         self.ReLU = torch.nn.ReLU()
-
         self.input_conv = torch.nn.Conv2d(3, self.in_channels, kernel_size = 3, stride = 1, padding = 1, bias = False)
 
-        ## Stages
-        # Stage 1
+        # Stages
+        self.stage1 = StageBlock(self.in_channels, self.mid_channels, num_blocks = 3, stride = 1)
+        self.stage2 = StageBlock(self.in_channels * 4, self.mid_channels * 2, num_blocks = 4, stride = 2)
+        self.stage3 = StageBlock(self.in_channels * 8, self.mid_channels * 4, num_blocks = 23, stride = 2)
+        self.stage4 = StageBlock(self.in_channels * 16, self.mid_channels * 8, num_blocks = 3, stride = 2) # shape = [N, 2048, 8, 8]
+        self.bn_final = torch.nn.BatchNorm2d(self.mid_channels * 8 * 4)
 
-        # Stage 2
-
-        # Stage 3
-
-        # Stage 4
-
+        # Average Pooling and Fully Connected Layer
+        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = torch.nn.Linear(2048, 1000)
+        self.output = torch.nn.Linear(1000, outputsize)
         
     def forward(self, x):
+        x = self.input_conv(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+
+        x = self.bn_final(x)
+        x = self.ReLU(x)
+        x = self.avgpool(x)
+        x = torch.reshape(x, [-1, 2048])
+        x = self.fc(x)
+        x = self.output(x)
+
         return x
     
-
 # RoR-3 Net( 110 )
-
 
 # ResNet 152
 # Structure: 3 - 8 - 36 - 3
@@ -325,4 +337,6 @@ class RoR_Block(torch.nn.Module):
 #         x = self.channel_attention(x)
 #         x = self.spatial_attention(x)
 #         return x
+    
+
     
