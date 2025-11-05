@@ -11,24 +11,25 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using device:', DEVICE)
 
 # ---------- User parameters --------- #
-learning_rate = 0.1
+learning_rate = 0.005
 model_save_path = ''
-batch_size = 32
+batch_size = 8
 
 restore_iter = 1000
-num_training = 2000
+num_training = 100000
 
 restore_lr = 0.001
 brestore = False
 
+# pre-calculated mean and std
 mean = [0.40006977, 0.44971865, 0.4779939]
 std = [0.2785395, 0.26381946, 0.2719872]
 
-model_save_interval = 1000
+model_save_interval = 500
 
 ## path
 path = 'E:/AdvancedDL/Project2/'
-model_save_path = path + "Model/new/"
+model_save_path = "Model/ResNet152/"
 
 
 # ---------- Load data --------------- #
@@ -74,7 +75,7 @@ for it in tqdm(range(restore_iter if brestore else 0, num_training + 1), ncols =
     train_loss.backward()
     optimizer.step()
 
-    if it % model_save_interval == 0: # and it > (restore_iter if brestore else 0):
+    if it % model_save_interval == 0 and it > (restore_iter if brestore else 0):
         tqdm.write("\niteration: %d " % it)
         tqdm.write("train loss : %f " % train_loss.item())
         tqdm.write('Evaluating the Model...')
@@ -97,10 +98,11 @@ for it in tqdm(range(restore_iter if brestore else 0, num_training + 1), ncols =
 
             if int(pred) == int(gt):
                 count += 1
-        accuracy = count / len(z_test_list)
+        accuracy = count / len(z_test_list) * 100.0
 
         tqdm.write('Accuracy   : %f' % accuracy)
         tqdm.write('Current LR : %f' % optimizer.param_groups[0]['lr'])
+
 
         tqdm.write('SAVING MODEL...')
         if not os.path.exists(model_save_path):
@@ -110,6 +112,13 @@ for it in tqdm(range(restore_iter if brestore else 0, num_training + 1), ncols =
 
         model_ckpt.append((it, accuracy, model_save_path + 'model_%d.pt' % it))
 
+    # Learning rate decay
+    if it == num_training // 10:
+        optimizer.param_groups[0]['lr'] = learning_rate * 0.1
+    if it == num_training * 3 // 10:
+        optimizer.param_groups[0]['lr'] = learning_rate * 0.01
+    if it == num_training * 6 // 10:
+        optimizer.param_groups[0]['lr'] = learning_rate * 0.001
 
 print('Training Finished.')
 print('Best Model')
