@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import cv2
 from tqdm import tqdm
+import zipfile
 
 # Read GT labels
 def read_gt(gt_txt, num_img):
@@ -26,6 +27,12 @@ def read_image_mean_std(z_file, z_file_list, mean, std, index):
     img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
     img_temp = img_temp.astype(np.float32)
     img_temp = (img_temp / 255.0 - mean) / std
+    return img_temp
+
+def read_image_only(z_file, z_file_list, index):
+    img_temp = z_file.read(z_file_list[index])
+    img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
+    img_temp = img_temp.astype(np.float32)
     return img_temp
 
 # Mean and Std Calculation
@@ -81,6 +88,38 @@ def image_augmentation(image, cutout = False, flip = True, flip_prob = 0.5):
         image = np.flip(image, 1) if prob > flip_prob else image
     return image
 
+# CutMix Augmentation
+def CutMix(z_file, z_file_list, train_cls, index1, index2):
+    img_temp1 = read_image_only(z_file, z_file_list, index1)
+    temp1_gt = train_cls[index1]
+    img_temp2 = read_image_only(z_file, z_file_list, index2)
+    temp2_gt = train_cls[index2]
+
+    H = img_temp1.shape[0] # in this case, H and W are both 128 << static size
+    W = img_temp1.shape[1]
+
+    # lambda follows beta distribution, alpha value is set to 1.0
+    lam = np.random.beta(1.0, 1.0)
+
+    # random bounding box with lambda
+    r_x = np.random.uniform(0, W) # x center of bbox (0 ~ W)
+    r_y = np.random.uniform(0, H) # y center of bbox (0 ~ H)
+    r_w = np.sqrt(1 - lam) * W # width of bbox
+    r_h = np.sqrt(1 - lam) * H # height of bbox
+    
+    x1 = int(np.clip(r_x - r_w / 2, 0, W))
+    x2 = int(np.clip(r_x + r_w / 2, 0, W))
+    y1 = int(np.clip(r_y - r_h / 2, 0, H))
+    y2 = int(np.clip(r_y + r_h / 2, 0, H))
+
+    image = img_temp1.copy()
+    image[y1: y2, x1: x2, :] = img_temp2[y1: y2, x1: x2, :]
+
+    lam = 1 - (x2 - x1) * (y2 - y1) / (W * H) # ratio of area: image 1
+
+    # returning mixed image and labels for both images, and lambda
+    return image, temp1_gt, temp2_gt, lam 
+
 def mini_batch_training_zip(z_file, z_file_list, train_cls, batch_size, mean, std, augmentation = True):
     batch_img = np.zeros((batch_size, 128, 128, 3))
     batch_cls = np.zeros(batch_size)
@@ -90,15 +129,18 @@ def mini_batch_training_zip(z_file, z_file_list, train_cls, batch_size, mean, st
 
     for it in range(batch_size):
         temp = rand_num[it]
-        img_temp = z_file.read(z_file_list[temp])
-        img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
-        img_temp = img_temp.astype(np.float32)
-        img_temp = (img_temp / 255.0 - mean) / std
+        # img_temp = z_file.read(z_file_list[temp])
+        # img_temp = cv2.imdecode(np.frombuffer(img_temp, np.uint8), 1)
+        # img_temp = img_temp.astype(np.float32)
+        # img_temp = (img_temp / 255.0 - mean) / std
+        img_temp = read_image_mean_std(z_file, z_file_list, mean, std, temp)
 
         batch_img[it, :, :, :] = img_temp if not augmentation else image_augmentation(img_temp)
         batch_cls[it] = train_cls[temp]
 
     return batch_img, batch_cls
+
+# RoR - 3
 
 # ResNet 101
 # Structure: 3 - 4 - 23 - 3
@@ -137,8 +179,6 @@ class ResNet101(torch.nn.Module):
         x = self.output(x)
 
         return x
-    
-# RoR-3 Net( 110 )
 
 # ResNet 152
 # Structure: 3 - 8 - 36 - 3
@@ -178,7 +218,95 @@ class ResNet152(torch.nn.Module):
 
         return x
     
-# Residual stage block
+# ResNet 50
+# Structure: 3 - 4 - 6 - 3
+class ResNet50(torch.nn.Module):
+    def __init__(self, outputsize = 200):
+        super(ResNet50, self).__init__()
+        self.in_channels = 64
+        self.mid_channels = 64
+        self.ReLU = torch.nn.ReLU()
+        self.input_conv = torch.nn.Conv2d(3, self.in_channels, kernel_size = 3, stride = 1, padding = 1, bias = False)
+        # Stages
+        self.stage1 = StageBlock(self.in_channels, self.mid_channels, num_blocks = 3, stride = 1)
+        self.stage2 = StageBlock(self.in_channels * 4, self.mid_channels * 2, num_blocks = 4, stride = 2)
+        self.stage3 = StageBlock(self.in_channels * 8, self.mid_channels * 4, num_blocks = 6, stride = 2)
+        self.stage4 = StageBlock(self.in_channels * 16, self.mid_channels * 8, num_blocks = 3, stride = 2) # shape = [N, 2048, 8, 8]
+        self.bn_final = torch.nn.BatchNorm2d(self.mid_channels * 8 * 4)
+
+        # Average Pooling and Fully Connected Layer
+        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = torch.nn.Linear(2048, 1000)
+        self.output = torch.nn.Linear(1000, outputsize)
+    def forward(self, x):
+        x = self.input_conv(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+
+        x = self.bn_final(x)
+        x = self.ReLU(x)
+        x = self.avgpool(x)
+        x = torch.reshape(x, [-1, 2048])
+        x = self.fc(x)
+        x = self.output(x)
+        return x
+    
+# ResNet 34
+# Structure: 3 - 4 - 6 - 3 ()
+class ResNet34(torch.nn.Module):
+    def __init__(self, outputsize = 200):
+        super(ResNet34, self).__init__()
+        self.in_channels = 64
+        self.ReLU = torch.nn.ReLU()
+        self.input_conv = torch.nn.Conv2d(3, self.in_channels, kernel_size = 3, stride = 1, padding = 1, bias = False)
+
+        # Stages
+        self.stage1 = BasicStageBlock(self.in_channels, self.in_channels, num_blocks = 3, stride = 1)
+        self.stage2 = BasicStageBlock(self.in_channels, self.in_channels * 2, num_blocks = 4, stride = 2)
+        self.stage3 = BasicStageBlock(self.in_channels * 2, self.in_channels * 4, num_blocks = 6, stride = 2)
+        self.stage4 = BasicStageBlock(self.in_channels * 4, self.in_channels * 8, num_blocks = 3, stride = 2) # shape = [N, 512, 8, 8]
+        self.bn_final = torch.nn.BatchNorm2d(self.in_channels * 8)
+
+        # Average Pooling and Fully Connected Layer
+        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = torch.nn.Linear(512, 1000)
+        self.output = torch.nn.Linear(1000, outputsize)
+        
+    def forward(self, x):
+        x = self.input_conv(x)
+        x = self.stage1(x)
+        x = self.stage2(x)
+        x = self.stage3(x)
+        x = self.stage4(x)
+
+        x = self.bn_final(x)
+        x = self.ReLU(x)
+        x = self.avgpool(x)
+        x = torch.reshape(x, [-1, 512])
+        x = self.fc(x)
+        x = self.output(x)
+
+        return x
+
+# Residual stage block (Basic Block)
+class BasicStageBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, num_blocks, stride = 1):
+        super(BasicStageBlock, self).__init__()
+
+        self.blocks = torch.nn.ModuleList()
+        for i in range(num_blocks):
+            if i == 0:
+                self.blocks.append(Block(in_channels, out_channels, stride = stride))
+            else:
+                self.blocks.append(Block(out_channels, out_channels, stride = 1))
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+    
+# Residual stage block (BottleNeck)
 class StageBlock(torch.nn.Module):
     def __init__(self, in_channels, mid_channels, num_blocks, stride = 1):
         super(StageBlock, self).__init__()
