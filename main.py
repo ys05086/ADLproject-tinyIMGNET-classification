@@ -11,12 +11,12 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Using device:', DEVICE)
 
 # ---------- User parameters --------- #
-learning_rate = 0.005
+learning_rate = 0.1
 model_save_path = ''
-batch_size = 8
+batch_size = 64
 
 restore_iter = 1000
-num_training = 100000
+num_training = 20000
 
 restore_lr = 0.001
 brestore = False
@@ -25,11 +25,11 @@ brestore = False
 mean = [0.40006977, 0.44971865, 0.4779939]
 std = [0.2785395, 0.26381946, 0.2719872]
 
-model_save_interval = 500
+model_save_interval = 100
 
 ## path
-path = 'E:/AdvancedDL/Project2/'
-model_save_path = "Model/ResNet152/"
+path = ''
+model_save_path = ''
 
 
 # ---------- Load data --------------- #
@@ -49,7 +49,7 @@ test_cls = ftn.read_gt(path + 'test_gt.txt', len(z_test_list))
 print('%d Test labels loaded.' % len(test_cls))
 
 # ----------- Model ------------------ #
-model = ftn.ResNet152(outputsize = 200).to(DEVICE)
+model = ftn.ResNet50(outputsize = 200).to(DEVICE)
 
 if brestore:
     print('Model Restore form %d iteration.' % restore_iter)
@@ -62,7 +62,7 @@ loss = torch.nn.CrossEntropyLoss()
 # ----------- Training --------------- #
 model_ckpt = []
 
-for it in tqdm(range(restore_iter if brestore else 0, num_training + 1), ncols = 120, desc = 'Training Progress'):
+for it in tqdm(range(restore_iter if brestore else 0, num_training), ncols = 120, desc = 'Training Progress'):
     batch_img, batch_cls = ftn.mini_batch_training_zip(z_train, z_train_list, train_cls, batch_size, mean, std)
     batch_img = np.transpose(batch_img, (0, 3, 1, 2)) # [B, H, W, C] -> [B, C, H, W]
 
