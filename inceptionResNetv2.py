@@ -20,12 +20,33 @@ class InceptionV4(torch.nn.Module):
         self.reduction_B = ReductionB()
 
         # Inception C
+        self.inception_C_in = InceptionC(in_channels = 2144)
         self.inception_C = InceptionC()
 
-        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+        self.avgpool = torch.nn.AdaptiveAvgPool2d((1, 1)) # output size should be (1, 1)
         self.dropout = torch.nn.Dropout(p = 0.2)
         self.last_linear = torch.nn.Linear(2048, output_size)
+
     def forward(self, x):
+        x = self.stem(x)
+        for _ in range(5):
+            x = self.inception_A(x)
+        x = self.reduction_A(x)
+
+        for _ in range(10):
+            x = self.inception_B(x)
+        x = self.reduction_B(x)
+
+        for _ in range(5):
+            if _ == 0:
+                x = self.inception_C_in(x)
+            else:
+                x = self.inception_C(x)
+
+        x = self.avgpool(x)
+        x = torch.reshape(x, [-1, 2048]) # flatten
+        x = self.dropout(x)
+        x = self.last_linear(x)
         return x
 
 class BasicConv2d(torch.nn.Module):
@@ -229,14 +250,38 @@ class InceptionB(torch.nn.Module):
 class ReductionB(torch.nn.Module):
     def __init__(self, in_channels = 1152):
         super(ReductionB, self).__init__()
+        self.branch1 = torch.nn.Sequential(
+            BasicConv2d(in_channels, 256, kernel_size = 1, stride = 1, padding = 0), # same
+            BasicConv2d(256, 288, kernel_size = 3, stride = 1, padding = 1), # same
+            BasicConv2d(288, 320, kernel_size = 3, stride = 2, padding = 0) # valid
+        )
+
+        self.branch2 = torch.nn.Sequential(
+            BasicConv2d(in_channels, 256, kernel_size = 1, stride = 1, padding = 0), # same
+            BasicConv2d(256, 288, kernel_size = 3, stride = 2, padding = 0) # valid
+        )
+
+        self.branch3 = torch.nn.Sequential(
+            BasicConv2d(in_channels, 256, kernel_size = 1, stride = 1, padding = 0), # same
+            BasicConv2d(256, 384, kernel_size = 3, stride = 2, padding = 0) # valid
+        )
+
+        self.Maxpool = torch.nn.MaxPool2d(3, stride = 2, padding = 0) # valid
 
     def forward(self, x):
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.branch3(x)
+        x4 = self.Maxpool(x)
+        # concat
+        x = torch.cat((x1, x2, x3, x4), dim = 1) # channel size = 320 + 288 + 384 + in_channels = 2144
         return x
 
 class InceptionC(torch.nn.Module):
     def __init__(self, in_channels = 2048):
         super(InceptionC, self).__init__()
         
+        self.in_channels = in_channels
         self.branch1 = torch.nn.Sequential(
             BasicConv2d(in_channels, 192, kernel_size = 1, stride = 1, padding = 0), # same
             BasicConv2d(192, 224, kernel_size = (1, 3), stride = 1, padding = (0, 1)), # same
@@ -249,10 +294,15 @@ class InceptionC(torch.nn.Module):
 
         self.last_conv = torch.nn.Conv2d(256 + 192, 2048, kernel_size = 1, stride = 1, padding = 0, bias = True) # same
 
+        # projection
+        self.projection = None
+        if self.in_channels != 2048:
+            self.projection = torch.nn.Conv2d(in_channels, 2048, kernel_size = 1, stride = 1, bias = False)
+
         self.ReLU = torch.nn.ReLU()
 
     def forward(self, x):
-        residual = x
+        residual = x if not self.projection else self.projection(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         # concat
