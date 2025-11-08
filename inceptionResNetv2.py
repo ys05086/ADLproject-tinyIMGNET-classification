@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import cv2
 
-# Inception V4 structure with ResNet
+# Inception V4 structure with ResNet v2
 class InceptionV4(torch.nn.Module):
     def __init__(self, output_size = 200):
         super(InceptionV4, self).__init__()
@@ -265,3 +265,30 @@ class InceptionC(torch.nn.Module):
 
 # Not used
 class BaseConv2d(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride = 1, padding = 0):
+        super(BaseConv2d, self).__init__()
+
+        self.ReLU = torch.nn.ReLU()
+        self.bn = torch.nn.BatchNorm2d(in_channels)
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size = 1, stride = 1, bias = False)
+        # bn - relu?
+        self.bn2 = torch.nn.BatchNorm2d(out_channels)
+        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size, stride, padding, bias = False)
+
+        # projection
+        if in_channels != out_channels or stride != 1:
+            self.projection = torch.nn.Conv2d(in_channels, out_channels, kernel_size = 1, stride = stride, bias = False)
+        else:
+            self.projection = None
+
+    def forward(self, x):
+        x = self.bn(x)
+        x = self.ReLU(x)
+        residual = x if self.projection is None else self.projection(x)
+        x = self.conv1(x)
+
+        x = self.bn2(x)
+        x = self.ReLU(x)
+        x = self.conv2(x)
+        x = x + residual
+        return x
