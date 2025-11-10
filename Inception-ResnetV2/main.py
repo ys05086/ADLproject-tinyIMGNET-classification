@@ -5,7 +5,6 @@ import cv2
 from tqdm import tqdm
 import function as ftn
 import zipfile
-import inceptionv4
 import inceptionv4_v2
 
 # ---------- Device configuration ---- #
@@ -14,15 +13,17 @@ print('Using device:', DEVICE)
 
 # ---------- User parameters --------- #
 learning_rate = 0.003
-model_save_path = "E:/AdvancedDL/Project2/Model/Inception_ResNetv2_new/"
+model_save_path = "E:/AdvancedDL/Project2/Model/Inception_ResNetv2_lrdecay/"
 batch_size = 64
 lr_decay_factor = 0.94
+lr_decay_iter = 10000
+decay_start = 20000
 
 restore_iter = 34000
 num_training = 200000
 
 restore_lr = 0.003
-brestore = False
+brestore = True
 
 # pre-calculated mean and std
 mean = [0.40006977, 0.44971865, 0.4779939]
@@ -117,12 +118,14 @@ for it in tqdm(range(restore_iter if brestore else 0, num_training), ncols = 120
         model_ckpt.append((it, accuracy, model_save_path + 'batch_%d_model_%d.pt' % (batch_size, it)))
 
     # Learning rate decay
-    if it == num_training * 3 // 10:
-        optimizer.param_groups[0]['lr'] = learning_rate * 0.1
-    if it == num_training * 4 // 10:
-        optimizer.param_groups[0]['lr'] = learning_rate * 0.01
-    if it == num_training * 5 // 10:
-        optimizer.param_groups[0]['lr'] = learning_rate * 0.001
+    if it % decay_start >= 0 and it > 0:
+        optimizer.param_groups[0]['lr'] = (lr_decay_factor ** (it / lr_decay_iter)) * (restore_lr if brestore else learning_rate)
+    # if it == num_training * 3 // 10:
+    #     optimizer.param_groups[0]['lr'] = learning_rate * 0.1
+    # if it == num_training * 4 // 10:
+    #     optimizer.param_groups[0]['lr'] = learning_rate * 0.01
+    # if it == num_training * 5 // 10:
+    #     optimizer.param_groups[0]['lr'] = learning_rate * 0.001
 
 print('Training Finished.')
 print('Best Model')
